@@ -1,0 +1,590 @@
+openapi: 3.0.3
+info:
+  title: Boundaries Not Included Server API
+  version: 0.2.0
+  description: Contract-first API for the Boundaries Not Included game server.
+servers:
+  - url: http://localhost:4000
+paths:
+  /health:
+    get:
+      summary: Service health check
+      operationId: getHealth
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - service
+                  - time
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: boundaries-not-included-server
+                  time:
+                    type: string
+                    format: date-time
+  /openapi.yaml:
+    get:
+      summary: Download the OpenAPI contract document
+      operationId: getOpenApiSpec
+      responses:
+        "200":
+          description: OpenAPI YAML document
+          content:
+            text/yaml:
+              schema:
+                type: string
+  /rooms:
+    post:
+      summary: Create a room and host session
+      operationId: createRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomRequest'
+      responses:
+        "201":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSessionResponse'
+        "422":
+          $ref: '#/components/responses/ValidationError'
+  /rooms/{code}/join:
+    post:
+      summary: Join a lobby room
+      operationId: joinRoom
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinRoomRequest'
+      responses:
+        "200":
+          description: Joined room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSessionResponse'
+        "404":
+          $ref: '#/components/responses/RoomNotFound'
+        "409":
+          description: Join blocked due to game state or room capacity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/reconnect:
+    post:
+      summary: Reconnect an existing room session
+      operationId: reconnectRoom
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconnectRequest'
+      responses:
+        "200":
+          description: Reconnected and returned latest snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconnectResponse'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+  /rooms/{code}:
+    get:
+      summary: Get personalized room snapshot
+      operationId: getRoomSnapshot
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      responses:
+        "200":
+          description: Snapshot for authenticated player
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "404":
+          $ref: '#/components/responses/RoomNotFound'
+  /rooms/{code}/ready:
+    post:
+      summary: Set lobby ready status
+      operationId: setReady
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetReadyRequest'
+      responses:
+        "200":
+          description: Updated snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "409":
+          description: Invalid state for ready toggle
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/start:
+    post:
+      summary: Start game from lobby
+      operationId: startGame
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      responses:
+        "200":
+          description: Updated snapshot after game start
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Host-only endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Not enough players or readiness unmet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/play-again:
+    post:
+      summary: Reset completed game and return room to lobby
+      operationId: playAgain
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      responses:
+        "200":
+          description: Updated snapshot after lobby reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Host-only endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: No completed game available for reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/submit:
+    post:
+      summary: Submit a hand card for current round
+      operationId: submitCard
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitCardRequest'
+      responses:
+        "200":
+          description: Updated snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Forbidden by role/state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Invalid round state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "422":
+          description: Hand card validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/pick-winner:
+    post:
+      summary: Judge selects winning submission
+      operationId: pickWinner
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PickWinnerRequest'
+      responses:
+        "200":
+          description: Updated snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Judge-only endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Invalid game state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/leave:
+    post:
+      summary: Leave room and revoke active session
+      operationId: leaveRoom
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      responses:
+        "204":
+          description: Left room successfully
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+components:
+  parameters:
+    RoomCode:
+      name: code
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Z]{6}$'
+    PlayerIdHeader:
+      name: x-player-id
+      in: header
+      required: true
+      schema:
+        type: string
+    BearerTokenHeader:
+      name: authorization
+      in: header
+      required: true
+      schema:
+        type: string
+        description: Bearer reconnect token
+  responses:
+    Unauthorized:
+      description: Authentication failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: UNAUTHORIZED
+            message: Invalid reconnect token
+    RoomNotFound:
+      description: Room does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: ROOM_NOT_FOUND
+            message: Room not found
+    ValidationError:
+      description: Request failed schema validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: VALIDATION_ERROR
+            message: displayName must be at least 2 characters
+  schemas:
+    CreateRoomRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 2
+          maxLength: 24
+        settings:
+          $ref: '#/components/schemas/RoomSettings'
+    JoinRoomRequest:
+      type: object
+      required: [displayName]
+      properties:
+        displayName:
+          type: string
+          minLength: 2
+          maxLength: 24
+    ReconnectRequest:
+      type: object
+      required: [playerId, reconnectToken]
+      properties:
+        playerId:
+          type: string
+        reconnectToken:
+          type: string
+    ReconnectResponse:
+      type: object
+      required: [playerId, reconnectToken, snapshot]
+      properties:
+        playerId:
+          type: string
+        reconnectToken:
+          type: string
+        snapshot:
+          $ref: '#/components/schemas/RoomSnapshot'
+    SetReadyRequest:
+      type: object
+      required: [isReady]
+      properties:
+        isReady:
+          type: boolean
+    SubmitCardRequest:
+      type: object
+      required: [handCardId]
+      properties:
+        handCardId:
+          type: string
+    PickWinnerRequest:
+      type: object
+      required: [submissionId]
+      properties:
+        submissionId:
+          type: string
+    RoomSessionResponse:
+      type: object
+      required: [roomCode, playerId, reconnectToken, snapshot]
+      properties:
+        roomCode:
+          type: string
+          pattern: '^[A-Z]{6}$'
+        playerId:
+          type: string
+        reconnectToken:
+          type: string
+        snapshot:
+          $ref: '#/components/schemas/RoomSnapshot'
+    RoomSettings:
+      type: object
+      required: [maxPlayers, targetScore]
+      properties:
+        maxPlayers:
+          type: integer
+          minimum: 3
+          maximum: 10
+        targetScore:
+          type: integer
+          minimum: 3
+          maximum: 20
+    RoomSnapshot:
+      type: object
+      required: [room, members, game, viewer]
+      properties:
+        room:
+          type: object
+          required: [id, code, status, settings]
+          properties:
+            id:
+              type: string
+            code:
+              type: string
+            status:
+              type: string
+              enum: [ROOM_OPEN, IN_GAME, CLOSED]
+            settings:
+              $ref: '#/components/schemas/RoomSettings'
+        members:
+          type: array
+          items:
+            type: object
+            required: [playerId, displayName, isHost, isReady, score, connected, handCount]
+            properties:
+              playerId:
+                type: string
+              displayName:
+                type: string
+              isHost:
+                type: boolean
+              isReady:
+                type: boolean
+              score:
+                type: integer
+              connected:
+                type: boolean
+              handCount:
+                type: integer
+        game:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/GameSnapshot'
+        viewer:
+          type: object
+          required: [playerId, displayName, isHost, isReady, score, connected, hand]
+          properties:
+            playerId:
+              type: string
+            displayName:
+              type: string
+            isHost:
+              type: boolean
+            isReady:
+              type: boolean
+            score:
+              type: integer
+            connected:
+              type: boolean
+            hand:
+              type: array
+              items:
+                type: object
+                required: [handCardId, cardId, text, pack]
+                properties:
+                  handCardId:
+                    type: string
+                  cardId:
+                    type: string
+                  text:
+                    type: string
+                  pack:
+                    type: string
+    GameSnapshot:
+      type: object
+      required:
+        - id
+        - status
+        - currentRound
+        - judgePlayerId
+        - prompt
+        - submissions
+        - submittedCount
+        - requiredCount
+        - winnerPlayerId
+        - endedReason
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [ROUND_SUBMIT, ROUND_PICK_WINNER, ROUND_RESULTS, GAME_OVER]
+        currentRound:
+          type: integer
+        judgePlayerId:
+          type: string
+          nullable: true
+        prompt:
+          nullable: true
+          type: object
+          required: [cardId, text, pickCount]
+          properties:
+            cardId:
+              type: string
+            text:
+              type: string
+            pickCount:
+              type: integer
+        submissions:
+          type: array
+          items:
+            type: object
+            required: [submissionId, text, revealOrder]
+            properties:
+              submissionId:
+                type: string
+              text:
+                type: string
+              revealOrder:
+                type: integer
+                nullable: true
+              playerId:
+                type: string
+              displayName:
+                type: string
+              isWinner:
+                type: boolean
+        submittedCount:
+          type: integer
+        requiredCount:
+          type: integer
+        winnerPlayerId:
+          type: string
+          nullable: true
+        endedReason:
+          type: string
+          nullable: true
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          enum:
+            - ROOM_NOT_FOUND
+            - ROOM_FULL
+            - GAME_IN_PROGRESS_JOIN_BLOCKED
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - INVALID_STATE
+            - VALIDATION_ERROR
+            - NOT_READY_TO_START
+            - CARD_NOT_IN_HAND
+            - INTERNAL_ERROR
+        message:
+          type: string
