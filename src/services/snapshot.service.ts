@@ -55,22 +55,32 @@ type RoundRow = {
   id: string;
   judge_player_id: string;
   black_card_id: string;
+  pick_count_required: number;
   status: string;
 };
 
 type PromptRow = {
   card_id: string;
   text: string;
-  pick_count: number;
 };
 
 type SubmissionRow = {
-  id: string;
+  submission_group_id: string;
+  card_order: number;
   player_id: string;
   display_name: string;
   card_text: string;
   reveal_order: number | null;
   is_winner: number;
+};
+
+type GroupedSubmission = {
+  submissionId: string;
+  revealOrder: number | null;
+  playerId: string;
+  displayName: string;
+  answerCards: string[];
+  isWinner: boolean;
 };
 
 function parseRoomSettings(raw: string): RoomSettings {
@@ -86,6 +96,32 @@ function parseRoomSettings(raw: string): RoomSettings {
       targetScore: DEFAULT_SETTINGS.targetScore
     };
   }
+}
+
+function buildSubmissionText(promptText: string, answerCards: string[]): string {
+  const matches = [...promptText.matchAll(/_+/g)];
+  if (matches.length === 0) {
+    const appended = answerCards.length > 0 ? ` ${answerCards.join(" ")}` : "";
+    return `${promptText.trim()}${appended}`.trim();
+  }
+
+  let cursor = 0;
+  let result = "";
+
+  matches.forEach((match, index) => {
+    const matchIndex = match.index ?? 0;
+    result += promptText.slice(cursor, matchIndex);
+    result += answerCards[index] ?? "_";
+    cursor = matchIndex + match[0].length;
+  });
+
+  result += promptText.slice(cursor);
+
+  if (answerCards.length > matches.length) {
+    result = `${result} ${answerCards.slice(matches.length).join(" ")}`.trim();
+  }
+
+  return result.trim();
 }
 
 export class SnapshotService {
@@ -189,7 +225,7 @@ export class SnapshotService {
 
     const round = this.connection
       .prepare(
-        `SELECT id, judge_player_id, black_card_id, status
+        `SELECT id, judge_player_id, black_card_id, pick_count_required, status
          FROM rounds
          WHERE game_id = ?
          ORDER BY round_number DESC
@@ -199,19 +235,24 @@ export class SnapshotService {
 
     const prompt = round
       ? ((this.connection
-          .prepare("SELECT id AS card_id, text, pick_count FROM black_cards WHERE id = ? LIMIT 1")
+          .prepare("SELECT id AS card_id, text FROM black_cards WHERE id = ? LIMIT 1")
           .get(round.black_card_id) as PromptRow | undefined) ?? null)
       : null;
 
     const submissions = round
       ? ((this.connection
           .prepare(
-            `SELECT rs.id, rs.player_id, p.display_name, wc.text AS card_text, rs.reveal_order, rs.is_winner
+            `SELECT rs.submission_group_id, rs.card_order, rs.player_id, p.display_name, wc.text AS card_text, rs.reveal_order, rs.is_winner
              FROM round_submissions rs
              JOIN players p ON p.id = rs.player_id
              JOIN white_cards wc ON wc.id = rs.white_card_id
              WHERE rs.round_id = ?
-             ORDER BY CASE WHEN rs.reveal_order IS NULL THEN 1 ELSE 0 END, rs.reveal_order ASC, rs.rowid ASC`
+             ORDER BY
+               CASE WHEN rs.reveal_order IS NULL THEN 1 ELSE 0 END,
+               rs.reveal_order ASC,
+               rs.submission_group_id ASC,
+               rs.card_order ASC,
+               rs.rowid ASC`
           )
           .all(round.id) as SubmissionRow[]) ?? [])
       : [];
@@ -229,24 +270,49 @@ export class SnapshotService {
     const shouldRevealIdentity =
       latestGame.status === GAME_STATUS.OVER || round?.status === GAME_STATUS.ROUND_RESULTS;
 
-    const submissionView = submissions
-      .filter((item) => round?.status !== GAME_STATUS.SUBMIT)
+    const groupedSubmissionsMap = new Map<string, GroupedSubmission>();
+    for (const row of submissions) {
+      const existing = groupedSubmissionsMap.get(row.submission_group_id);
+      if (existing) {
+        existing.answerCards.push(row.card_text);
+        existing.isWinner = existing.isWinner || Boolean(row.is_winner);
+        continue;
+      }
+
+      groupedSubmissionsMap.set(row.submission_group_id, {
+        submissionId: row.submission_group_id,
+        revealOrder: row.reveal_order,
+        playerId: row.player_id,
+        displayName: row.display_name,
+        answerCards: [row.card_text],
+        isWinner: Boolean(row.is_winner)
+      });
+    }
+
+    const groupedSubmissions = [...groupedSubmissionsMap.values()];
+
+    const submissionView = groupedSubmissions
+      .filter(() => round?.status !== GAME_STATUS.SUBMIT)
       .map((item) => {
+        const text = prompt ? buildSubmissionText(prompt.text, item.answerCards) : item.answerCards.join(" ");
+
         if (shouldRevealIdentity) {
           return {
-            submissionId: item.id,
-            text: item.card_text,
-            revealOrder: item.reveal_order,
-            playerId: item.player_id,
-            displayName: item.display_name,
-            isWinner: Boolean(item.is_winner)
+            submissionId: item.submissionId,
+            text,
+            answerCards: item.answerCards,
+            revealOrder: item.revealOrder,
+            playerId: item.playerId,
+            displayName: item.displayName,
+            isWinner: item.isWinner
           };
         }
 
         return {
-          submissionId: item.id,
-          text: item.card_text,
-          revealOrder: item.reveal_order
+          submissionId: item.submissionId,
+          text,
+          answerCards: item.answerCards,
+          revealOrder: item.revealOrder
         };
       });
 
@@ -263,11 +329,11 @@ export class SnapshotService {
         ? {
             cardId: prompt.card_id,
             text: prompt.text,
-            pickCount: prompt.pick_count
+            pickCount: round?.pick_count_required ?? 1
           }
         : null,
       submissions: submissionView,
-      submittedCount: submissions.length,
+      submittedCount: groupedSubmissions.length,
       requiredCount,
       winnerPlayerId: latestGame.winner_player_id,
       endedReason: latestGame.ended_reason

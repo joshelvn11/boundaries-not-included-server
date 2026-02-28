@@ -53,7 +53,9 @@ const readySchema = z.object({
 });
 
 const submitSchema = z.object({
-  handCardId: z.string().min(1)
+  handCardIds: z.array(z.string().min(1)).min(1).max(3).refine((items) => new Set(items).size === items.length, {
+    message: "handCardIds must be unique"
+  })
 });
 
 const pickSchema = z.object({
@@ -485,7 +487,7 @@ export class RoomLifecycleService {
     const parsed = this.validateSubmitPayload(input);
 
     const tx = this.connection.transaction(() => {
-      this.gameEngine.submitCard(auth.roomId, auth.playerId, parsed.handCardId);
+      this.gameEngine.submitCard(auth.roomId, auth.playerId, parsed.handCardIds);
     });
     tx();
 

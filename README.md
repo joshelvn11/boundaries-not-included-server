@@ -46,6 +46,11 @@ pnpm db:migrate  # apply SQL migrations
 - `POST /rooms/:code/pick-winner`
 - `POST /rooms/:code/leave`
 
+Phase 7 submit payload:
+
+- `POST /rooms/:code/submit` now accepts `{ "handCardIds": ["hand_a", "hand_b"] }`
+- Required card count is derived from black-card underscore blanks per round (`0 -> 1`, `1..3 -> exact`, `>3` prompts skipped)
+
 Authenticated endpoints require:
 
 - `x-player-id: <playerId>`

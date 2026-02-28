@@ -217,7 +217,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /rooms/{code}/submit:
     post:
-      summary: Submit a hand card for current round
+      summary: Submit one or more hand cards for current round
       operationId: submitCard
       parameters:
         - $ref: '#/components/parameters/RoomCode'
@@ -399,10 +399,15 @@ components:
           type: boolean
     SubmitCardRequest:
       type: object
-      required: [handCardId]
+      required: [handCardIds]
       properties:
-        handCardId:
-          type: string
+        handCardIds:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items:
+            type: string
     PickWinnerRequest:
       type: object
       required: [submissionId]
@@ -544,12 +549,16 @@ components:
           type: array
           items:
             type: object
-            required: [submissionId, text, revealOrder]
+            required: [submissionId, text, answerCards, revealOrder]
             properties:
               submissionId:
                 type: string
               text:
                 type: string
+              answerCards:
+                type: array
+                items:
+                  type: string
               revealOrder:
                 type: integer
                 nullable: true

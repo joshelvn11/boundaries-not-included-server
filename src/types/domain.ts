@@ -66,6 +66,7 @@ export type RoomSnapshot = {
     submissions: Array<{
       submissionId: string;
       text: string;
+      answerCards: string[];
       revealOrder: number | null;
       playerId?: string;
       displayName?: string;

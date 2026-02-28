@@ -56,6 +56,7 @@ export const rounds = sqliteTable("rounds", {
   roundNumber: integer("round_number").notNull(),
   judgePlayerId: text("judge_player_id").notNull(),
   blackCardId: text("black_card_id").notNull(),
+  pickCountRequired: integer("pick_count_required").notNull().default(1),
   status: text("status").notNull(),
   startedAt: text("started_at"),
   endedAt: text("ended_at")
@@ -68,6 +69,8 @@ export const roundSubmissions = sqliteTable(
     roundId: text("round_id").notNull(),
     playerId: text("player_id").notNull(),
     whiteCardId: text("white_card_id").notNull(),
+    submissionGroupId: text("submission_group_id"),
+    cardOrder: integer("card_order").notNull().default(1),
     isWinner: integer("is_winner", { mode: "boolean" }).notNull().default(false),
     revealOrder: integer("reveal_order"),
     submittedAt: text("submitted_at").notNull()
@@ -76,6 +79,15 @@ export const roundSubmissions = sqliteTable(
     roundRevealOrderIdx: index("idx_round_submissions_round_reveal_order").on(
       table.roundId,
       table.revealOrder
+    ),
+    roundGroupIdx: index("idx_round_submissions_round_group").on(
+      table.roundId,
+      table.submissionGroupId
+    ),
+    roundGroupOrderIdx: index("idx_round_submissions_round_group_order").on(
+      table.roundId,
+      table.submissionGroupId,
+      table.cardOrder
     )
   })
 );

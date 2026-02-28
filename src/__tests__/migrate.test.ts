@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("runMigrations", () => {
-  it("creates all core tables and phase 6 game archive column", async () => {
+  it("creates all core tables and phase 6/7 columns", async () => {
     const tempDbPath = path.join(os.tmpdir(), `bni-test-${Date.now()}.sqlite`);
     createdFiles.push(tempDbPath);
 
@@ -32,6 +32,12 @@ describe("runMigrations", () => {
       .all() as Array<{ name: string }>;
     const gameColumns = db
       .prepare("PRAGMA table_info(games)")
+      .all() as Array<{ name: string }>;
+    const roundColumns = db
+      .prepare("PRAGMA table_info(rounds)")
+      .all() as Array<{ name: string }>;
+    const roundSubmissionColumns = db
+      .prepare("PRAGMA table_info(round_submissions)")
       .all() as Array<{ name: string }>;
 
     db.close();
@@ -56,5 +62,8 @@ describe("runMigrations", () => {
 
     expect(tableNames.some((name) => name.includes("drizzle_migrations"))).toBe(true);
     expect(gameColumns.map((column) => column.name)).toContain("archived_at");
+    expect(roundColumns.map((column) => column.name)).toContain("pick_count_required");
+    expect(roundSubmissionColumns.map((column) => column.name)).toContain("submission_group_id");
+    expect(roundSubmissionColumns.map((column) => column.name)).toContain("card_order");
   });
 });

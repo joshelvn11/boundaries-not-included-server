@@ -199,9 +199,12 @@ describe("socket authentication and state emission", () => {
 
     for (const participant of participants) {
       const snapshot = roomService.getSnapshotForPlayer(host.roomCode, participant.playerId);
+      const pickCount = snapshot.game?.prompt?.pickCount ?? 1;
       roomService.submitCard(
         roomService.authenticateRequest(host.roomCode, participant.playerId, participant.reconnectToken),
-        { handCardId: snapshot.viewer.hand[0].handCardId }
+        {
+          handCardIds: snapshot.viewer.hand.slice(0, pickCount).map((card) => card.handCardId)
+        }
       );
     }
 
@@ -216,7 +219,7 @@ describe("socket authentication and state emission", () => {
     }
 
     const winnerRow = connection
-      .prepare("SELECT player_id FROM round_submissions WHERE id = ? LIMIT 1")
+      .prepare("SELECT player_id FROM round_submissions WHERE submission_group_id = ? LIMIT 1")
       .get(submissionId) as { player_id: string } | undefined;
     const roomRow = connection
       .prepare("SELECT id FROM rooms WHERE code = ? LIMIT 1")

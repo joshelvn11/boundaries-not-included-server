@@ -16,6 +16,7 @@ type ActiveRoundRow = {
   id: string;
   round_number: number;
   judge_player_id: string;
+  pick_count_required: number;
   status: string;
 };
 
@@ -28,6 +29,11 @@ type MemberRow = {
 type HandRow = {
   id: string;
   white_card_id: string;
+};
+
+type BlackCardRow = {
+  id: string;
+  text: string;
 };
 
 function createId(prefix: string): string {
@@ -47,6 +53,19 @@ function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
+function inferPromptPickCount(promptText: string): number | null {
+  const blankCount = promptText.match(/_+/g)?.length ?? 0;
+  if (blankCount === 0) {
+    return 1;
+  }
+
+  if (blankCount > 3) {
+    return null;
+  }
+
+  return blankCount;
+}
+
 export class GameEngineService {
   constructor(private readonly connection: Database.Database) {}
 
@@ -62,7 +81,7 @@ export class GameEngineService {
     const roundId = createId("round");
     const startedAt = nowIso();
     const judge = connectedPlayers[0];
-    const blackCardId = this.pickRandomBlackCardId();
+    const blackPrompt = this.pickPlayableBlackPrompt();
 
     this.connection.prepare("DELETE FROM player_hands WHERE room_id = ?").run(roomId);
 
@@ -75,10 +94,19 @@ export class GameEngineService {
 
     this.connection
       .prepare(
-        `INSERT INTO rounds (id, game_id, round_number, judge_player_id, black_card_id, status, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+        `INSERT INTO rounds (id, game_id, round_number, judge_player_id, black_card_id, pick_count_required, status, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`
       )
-      .run(roundId, gameId, 1, judge.player_id, blackCardId, GAME_STATUS.SUBMIT, startedAt);
+      .run(
+        roundId,
+        gameId,
+        1,
+        judge.player_id,
+        blackPrompt.id,
+        blackPrompt.pickCountRequired,
+        GAME_STATUS.SUBMIT,
+        startedAt
+      );
 
     this.connection.prepare("UPDATE rooms SET status = ? WHERE id = ?").run(ROOM_STATUS.IN_GAME, roomId);
     this.connection.prepare("UPDATE room_players SET score = 0, is_ready = 0 WHERE room_id = ?").run(roomId);
@@ -86,7 +114,7 @@ export class GameEngineService {
     this.ensureHands(roomId, connectedPlayers.map((row) => row.player_id));
   }
 
-  submitCard(roomId: string, playerId: string, handCardId: string): void {
+  submitCard(roomId: string, playerId: string, handCardIds: string[]): void {
     const game = this.getActiveGame(roomId);
     const round = this.getCurrentRound(game.id);
 
@@ -98,6 +126,15 @@ export class GameEngineService {
       throw new ApiError(403, "FORBIDDEN", "Judge cannot submit a card this round");
     }
 
+    if (handCardIds.length !== round.pick_count_required) {
+      const cardWord = round.pick_count_required === 1 ? "card" : "cards";
+      throw new ApiError(
+        409,
+        "INVALID_STATE",
+        `This round requires exactly ${round.pick_count_required} ${cardWord}`
+      );
+    }
+
     const existingSubmission = this.connection
       .prepare("SELECT 1 FROM round_submissions WHERE round_id = ? AND player_id = ? LIMIT 1")
       .get(round.id, playerId);
@@ -106,27 +143,52 @@ export class GameEngineService {
       throw new ApiError(409, "INVALID_STATE", "Player already submitted this round");
     }
 
-    const handCard = this.connection
+    const placeholders = handCardIds.map(() => "?").join(", ");
+    const handCards = this.connection
       .prepare(
         `SELECT id, white_card_id
          FROM player_hands
-         WHERE id = ? AND room_id = ? AND player_id = ?
-         LIMIT 1`
+         WHERE room_id = ? AND player_id = ? AND id IN (${placeholders})`
       )
-      .get(handCardId, roomId, playerId) as HandRow | undefined;
+      .all(roomId, playerId, ...handCardIds) as HandRow[];
 
-    if (!handCard) {
+    if (handCards.length !== handCardIds.length) {
       throw new ApiError(422, "CARD_NOT_IN_HAND", "Submitted card is not in player's hand");
     }
 
-    this.connection.prepare("DELETE FROM player_hands WHERE id = ?").run(handCard.id);
+    const byHandId = new Map<string, string>(handCards.map((item) => [item.id, item.white_card_id]));
 
     this.connection
       .prepare(
-        `INSERT INTO round_submissions (id, round_id, player_id, white_card_id, is_winner, reveal_order, submitted_at)
-         VALUES (?, ?, ?, ?, 0, NULL, ?)`
+        `DELETE FROM player_hands
+         WHERE room_id = ? AND player_id = ? AND id IN (${placeholders})`
       )
-      .run(createId("sub"), round.id, playerId, handCard.white_card_id, nowIso());
+      .run(roomId, playerId, ...handCardIds);
+
+    const submissionGroupId = createId("subgrp");
+    const insertSubmission = this.connection.prepare(
+      `INSERT INTO round_submissions (
+         id, round_id, player_id, white_card_id, submission_group_id, card_order, is_winner, reveal_order, submitted_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?)`
+    );
+
+    handCardIds.forEach((handCardId, index) => {
+      const whiteCardId = byHandId.get(handCardId);
+      if (!whiteCardId) {
+        throw new ApiError(422, "CARD_NOT_IN_HAND", "Submitted card is not in player's hand");
+      }
+
+      insertSubmission.run(
+        createId("sub"),
+        round.id,
+        playerId,
+        whiteCardId,
+        submissionGroupId,
+        index + 1,
+        nowIso()
+      );
+    });
 
     this.transitionToPickIfReady(roomId, game.id, round.id, round.judge_player_id);
   }
@@ -145,19 +207,23 @@ export class GameEngineService {
 
     const submission = this.connection
       .prepare(
-        `SELECT id, player_id
+        `SELECT submission_group_id, player_id
          FROM round_submissions
-         WHERE id = ? AND round_id = ?
+         WHERE submission_group_id = ? AND round_id = ?
          LIMIT 1`
       )
-      .get(submissionId, round.id) as { id: string; player_id: string } | undefined;
+      .get(submissionId, round.id) as
+      | { submission_group_id: string; player_id: string }
+      | undefined;
 
     if (!submission) {
       throw new ApiError(404, "INVALID_STATE", "Submission does not belong to current round");
     }
 
     this.connection.prepare("UPDATE round_submissions SET is_winner = 0 WHERE round_id = ?").run(round.id);
-    this.connection.prepare("UPDATE round_submissions SET is_winner = 1 WHERE id = ?").run(submission.id);
+    this.connection
+      .prepare("UPDATE round_submissions SET is_winner = 1 WHERE round_id = ? AND submission_group_id = ?")
+      .run(round.id, submission.submission_group_id);
     this.connection
       .prepare("UPDATE room_players SET score = score + 1 WHERE room_id = ? AND player_id = ?")
       .run(roomId, submission.player_id);
@@ -186,16 +252,25 @@ export class GameEngineService {
     const nextJudge = this.selectNextJudge(connected, round.judge_player_id);
     const nextRoundNumber = round.round_number + 1;
     const nextRoundId = createId("round");
-    const blackCardId = this.pickRandomBlackCardId();
+    const blackPrompt = this.pickPlayableBlackPrompt();
 
     this.ensureHands(roomId, connected.map((row) => row.player_id));
 
     this.connection
       .prepare(
-        `INSERT INTO rounds (id, game_id, round_number, judge_player_id, black_card_id, status, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`
+        `INSERT INTO rounds (id, game_id, round_number, judge_player_id, black_card_id, pick_count_required, status, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`
       )
-      .run(nextRoundId, game.id, nextRoundNumber, nextJudge.player_id, blackCardId, GAME_STATUS.SUBMIT, nowIso());
+      .run(
+        nextRoundId,
+        game.id,
+        nextRoundNumber,
+        nextJudge.player_id,
+        blackPrompt.id,
+        blackPrompt.pickCountRequired,
+        GAME_STATUS.SUBMIT,
+        nowIso()
+      );
 
     this.connection
       .prepare("UPDATE games SET status = ?, current_round = ?, winner_player_id = ? WHERE id = ?")
@@ -252,7 +327,11 @@ export class GameEngineService {
 
     const submittedCount = (
       this.connection
-        .prepare("SELECT COUNT(*) AS count FROM round_submissions WHERE round_id = ?")
+        .prepare(
+          `SELECT COUNT(DISTINCT submission_group_id) AS count
+           FROM round_submissions
+           WHERE round_id = ?`
+        )
         .get(roundId) as { count: number }
     ).count;
 
@@ -261,16 +340,21 @@ export class GameEngineService {
     }
 
     const rows = this.connection
-      .prepare("SELECT id FROM round_submissions WHERE round_id = ?")
-      .all(roundId) as Array<{ id: string }>;
+      .prepare(
+        `SELECT DISTINCT submission_group_id
+         FROM round_submissions
+         WHERE round_id = ?
+         ORDER BY submission_group_id ASC`
+      )
+      .all(roundId) as Array<{ submission_group_id: string }>;
 
     const ordered = shuffle(rows);
     const updateOrder = this.connection.prepare(
-      "UPDATE round_submissions SET reveal_order = ? WHERE id = ?"
+      "UPDATE round_submissions SET reveal_order = ? WHERE round_id = ? AND submission_group_id = ?"
     );
 
     ordered.forEach((item, index) => {
-      updateOrder.run(index + 1, item.id);
+      updateOrder.run(index + 1, roundId, item.submission_group_id);
     });
 
     this.connection
@@ -332,7 +416,7 @@ export class GameEngineService {
   private getCurrentRound(gameId: string): ActiveRoundRow {
     const round = this.connection
       .prepare(
-        `SELECT id, round_number, judge_player_id, status
+        `SELECT id, round_number, judge_player_id, pick_count_required, status
          FROM rounds
          WHERE game_id = ?
          ORDER BY round_number DESC
@@ -405,16 +489,28 @@ export class GameEngineService {
     }
   }
 
-  private pickRandomBlackCardId(): string {
-    const card = this.connection
-      .prepare("SELECT id FROM black_cards WHERE is_active = 1 ORDER BY RANDOM() LIMIT 1")
-      .get() as { id: string } | undefined;
+  private pickPlayableBlackPrompt(): { id: string; pickCountRequired: number } {
+    const cards = this.connection
+      .prepare("SELECT id, text FROM black_cards WHERE is_active = 1 ORDER BY RANDOM()")
+      .all() as BlackCardRow[];
 
-    if (!card) {
-      throw new ApiError(409, "INVALID_STATE", "No black cards available");
+    for (const card of cards) {
+      const inferredPickCount = inferPromptPickCount(card.text);
+      if (!inferredPickCount) {
+        continue;
+      }
+
+      return {
+        id: card.id,
+        pickCountRequired: inferredPickCount
+      };
     }
 
-    return card.id;
+    throw new ApiError(
+      409,
+      "INVALID_STATE",
+      "No playable black cards available for current blank-count rules"
+    );
   }
 
   private assertCardPoolAvailable(): void {

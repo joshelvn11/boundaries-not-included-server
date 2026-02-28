@@ -54,6 +54,10 @@ Environment variables:
 
 - `round_submissions`
   - Added `reveal_order` for anonymized reveal sorting.
+  - Added `submission_group_id` and `card_order` for multi-card submissions stored as grouped rows.
+
+- `rounds`
+  - Added `pick_count_required` for effective per-round submit requirements.
 
 ## Services
 
@@ -73,11 +77,15 @@ Game state transitions:
 
 - start game
 - deal hands
-- accept submissions
+- accept grouped submissions (`handCardIds[]`) with exact count validation
 - transition submit -> judge pick
 - apply winner and score updates
 - rotate judge and create next round
 - end game on target score or insufficient players
+- derives per-round pick count from black prompt text underscores (`_+`):
+  - 0 blanks => pick count 1
+  - 1..3 blanks => exact blank count
+  - >3 blanks => prompt skipped as unplayable
 
 ### `snapshot.service.ts`
 
@@ -87,6 +95,10 @@ Builds personalized `room:state` payload:
 - anonymized submissions during judge-pick phase
 - player identity + winner details revealed in results/game-over
 - only the latest unarchived game row is considered active for snapshot rendering
+- submission rows are grouped by `submission_group_id` into snapshot submissions with:
+  - `submissionId` (group id)
+  - `answerCards` (ordered card texts)
+  - `text` (filled prompt sentence fallback)
 
 ## REST layer
 
@@ -124,6 +136,7 @@ Error contract is standardized in `src/app.ts`:
 - reconnect grace: 90 seconds
 - minimum players to start: 3 connected
 - all connected players must be ready to start
+- per-round pick count derives from prompt blank count (max supported picks: 3)
 - no submit timer, no judge timer
 - no host override for judge decision
 - mid-game joins blocked
@@ -135,6 +148,7 @@ Error contract is standardized in `src/app.ts`:
 - `migrate.test.ts`: verifies migrated tables
 - `rooms.test.ts`: REST lifecycle and round flow integration
 - `socket.test.ts`: handshake success/failure and initial state emission
+- phase coverage includes multi-pick validation, blank-count prompt policy, unplayable-prompt start guard, grouped winner scoring, and existing play-again lifecycle.
 - Integration tests explicitly close their SQLite connections in `afterEach` to avoid cross-test resource leakage and flaky request failures.
 
 ## Contract ownership
