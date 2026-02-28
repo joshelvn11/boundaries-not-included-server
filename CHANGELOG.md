@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added Phase 7 migration `0003_phase7_multi_pick.sql` with `rounds.pick_count_required` and grouped submission columns/indexes.
 - Added grouped multi-card submission support (up to 3 cards) using `handCardIds[]` and `submission_group_id`.
 - Added server test coverage for two-blank exact submit requirements, no-blank default pick count, >3-blank prompt skipping, start failure with only unplayable prompts, and grouped winner scoring.
+- Added `POST /rooms/:code/next-round` for judge-driven transition from `ROUND_RESULTS` to the next round.
+- Added server integration coverage for round-results snapshots, judge-only next-round authorization, invalid-state handling, and not-enough-connected-player game-over behavior at next-round time.
+- Added socket coverage for `room:state` emissions on `pick-winner -> ROUND_RESULTS` and `next-round -> ROUND_SUBMIT`.
 
 ### Changed
 
@@ -36,6 +39,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Updated `/rooms/:code/submit` contract from single `handCardId` to ordered `handCardIds[]`.
 - Updated round prompt selection to derive effective pick count from underscore blank groups (`_+`) and skip prompts requiring more than 3 picks.
 - Updated snapshot submission payloads to include ordered `answerCards` and a filled-sentence `text` preview for judge/results/game-over views.
+- Updated non-terminal `pick-winner` behavior to stop in `ROUND_RESULTS` instead of auto-starting the next round.
+- Updated round progression to require current judge action (`POST /rooms/:code/next-round`) before advancing from results.
 
 ### Fixed
 

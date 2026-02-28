@@ -33,9 +33,17 @@ async function getSnapshot(roomCode: string, auth: Auth) {
   expect(response.status).toBe(200);
   return response.body as {
     game: {
+      status: string;
+      currentRound: number;
       judgePlayerId: string;
       prompt: { pickCount: number } | null;
-      submissions: Array<{ submissionId: string }>;
+      endedReason: string | null;
+      submissions: Array<{
+        submissionId: string;
+        text?: string;
+        displayName?: string;
+        isWinner?: boolean;
+      }>;
     };
     viewer: {
       hand: Array<{ handCardId: string }>;
@@ -153,6 +161,72 @@ async function createGameOverRoom(): Promise<{
     hostAuth,
     player2Auth,
     player3Auth
+  };
+}
+
+async function createRoundResultsRoom(): Promise<{
+  roomCode: string;
+  hostAuth: Auth;
+  player2Auth: Auth;
+  player3Auth: Auth;
+  judgeAuth: Auth;
+  nonJudgeAuth: Auth;
+}> {
+  const createResponse = await request(app).post("/rooms").send({ displayName: "Host" });
+  const roomCode = createResponse.body.roomCode as string;
+
+  const hostAuth: Auth = {
+    playerId: createResponse.body.playerId,
+    reconnectToken: createResponse.body.reconnectToken
+  };
+
+  const join2 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 2" });
+  const join3 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 3" });
+  const player2Auth: Auth = { playerId: join2.body.playerId, reconnectToken: join2.body.reconnectToken };
+  const player3Auth: Auth = { playerId: join3.body.playerId, reconnectToken: join3.body.reconnectToken };
+
+  await request(app).post(`/rooms/${roomCode}/ready`).set(authHeaders(player2Auth)).send({ isReady: true });
+  await request(app).post(`/rooms/${roomCode}/ready`).set(authHeaders(player3Auth)).send({ isReady: true });
+
+  const start = await request(app).post(`/rooms/${roomCode}/start`).set(authHeaders(hostAuth)).send({});
+  expect(start.status).toBe(200);
+
+  const startSnapshot = await getSnapshot(roomCode, hostAuth);
+  const judgeId = startSnapshot.game.judgePlayerId;
+  const participants = [hostAuth, player2Auth, player3Auth].filter((player) => player.playerId !== judgeId);
+
+  for (const participant of participants) {
+    const snapshot = await getSnapshot(roomCode, participant);
+    const pickCount = snapshot.game.prompt?.pickCount ?? 1;
+    const submitResponse = await submitCardsForRound(roomCode, participant, pickCount);
+    expect(submitResponse.status).toBe(200);
+  }
+
+  const judgeAuth = [hostAuth, player2Auth, player3Auth].find(
+    (auth) => auth.playerId === judgeId
+  ) as Auth;
+  const nonJudgeAuth = [hostAuth, player2Auth, player3Auth].find(
+    (auth) => auth.playerId !== judgeId
+  ) as Auth;
+
+  const pickSnapshot = await getSnapshot(roomCode, judgeAuth);
+  const submissionId = pickSnapshot.game.submissions[0].submissionId;
+
+  const pickWinner = await request(app)
+    .post(`/rooms/${roomCode}/pick-winner`)
+    .set(authHeaders(judgeAuth))
+    .send({ submissionId });
+
+  expect(pickWinner.status, JSON.stringify(pickWinner.body)).toBe(200);
+  expect(pickWinner.body.game.status).toBe("ROUND_RESULTS");
+
+  return {
+    roomCode,
+    hostAuth,
+    player2Auth,
+    player3Auth,
+    judgeAuth,
+    nonJudgeAuth
   };
 }
 
@@ -357,60 +431,86 @@ describe("rooms API", () => {
     expect(invalidSubmit.body.error).toBe("CARD_NOT_IN_HAND");
   });
 
-  it("advances from judge pick to next round after selecting winner", async () => {
+  it("moves into round results after judge pick, then advances with judge next-round action", async () => {
+    const { roomCode, judgeAuth } = await createRoundResultsRoom();
+
+    const resultsSnapshot = await getSnapshot(roomCode, judgeAuth);
+    expect(resultsSnapshot.game.status).toBe("ROUND_RESULTS");
+    expect(resultsSnapshot.game.submissions.length).toBeGreaterThan(0);
+
+    const nextRound = await request(app)
+      .post(`/rooms/${roomCode}/next-round`)
+      .set(authHeaders(judgeAuth))
+      .send({});
+
+    expect(nextRound.status).toBe(200);
+    expect(nextRound.body.game.status).toBe("ROUND_SUBMIT");
+    expect(nextRound.body.game.currentRound).toBe(2);
+  });
+
+  it("includes submission attribution and winner marker in round results snapshot", async () => {
+    const { roomCode, judgeAuth } = await createRoundResultsRoom();
+    const resultsSnapshot = await getSnapshot(roomCode, judgeAuth);
+
+    expect(resultsSnapshot.game.status).toBe("ROUND_RESULTS");
+    expect(resultsSnapshot.game.submissions.length).toBeGreaterThan(0);
+    expect(resultsSnapshot.game.submissions.every((submission) => typeof submission.displayName === "string")).toBe(
+      true
+    );
+    expect(resultsSnapshot.game.submissions.some((submission) => submission.isWinner === true)).toBe(true);
+  });
+
+  it("forbids next-round for non-judge players", async () => {
+    const { roomCode, nonJudgeAuth } = await createRoundResultsRoom();
+
+    const nextRound = await request(app)
+      .post(`/rooms/${roomCode}/next-round`)
+      .set(authHeaders(nonJudgeAuth))
+      .send({});
+
+    expect(nextRound.status).toBe(403);
+    expect(nextRound.body.error).toBe("FORBIDDEN");
+  });
+
+  it("rejects next-round outside round-results state", async () => {
     const createResponse = await request(app).post("/rooms").send({ displayName: "Host" });
     const roomCode = createResponse.body.roomCode as string;
-
     const hostAuth: Auth = {
       playerId: createResponse.body.playerId,
       reconnectToken: createResponse.body.reconnectToken
     };
 
-    const join2 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 2" });
-    const join3 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 3" });
-
-    const player2Auth: Auth = { playerId: join2.body.playerId, reconnectToken: join2.body.reconnectToken };
-    const player3Auth: Auth = { playerId: join3.body.playerId, reconnectToken: join3.body.reconnectToken };
-
-    await request(app)
-      .post(`/rooms/${roomCode}/ready`)
-      .set(authHeaders(player2Auth))
-      .send({ isReady: true });
-    await request(app)
-      .post(`/rooms/${roomCode}/ready`)
-      .set(authHeaders(player3Auth))
-      .send({ isReady: true });
-
-    await request(app)
-      .post(`/rooms/${roomCode}/start`)
+    const nextRound = await request(app)
+      .post(`/rooms/${roomCode}/next-round`)
       .set(authHeaders(hostAuth))
       .send({});
 
-    const startSnapshot = await getSnapshot(roomCode, hostAuth);
-    const judgeId = startSnapshot.game.judgePlayerId;
-    const participants = [hostAuth, player2Auth, player3Auth].filter((player) => player.playerId !== judgeId);
+    expect(nextRound.status).toBe(409);
+    expect(nextRound.body.error).toBe("INVALID_STATE");
+  });
 
-    for (const participant of participants) {
-      const snapshot = await getSnapshot(roomCode, participant);
-      const pickCount = snapshot.game.prompt?.pickCount ?? 1;
-      const submitResponse = await submitCardsForRound(roomCode, participant, pickCount);
-      expect(submitResponse.status).toBe(200);
-    }
+  it("ends game with NOT_ENOUGH_PLAYERS when connected players drop below 3 before next-round", async () => {
+    const { roomCode, judgeAuth, nonJudgeAuth } = await createRoundResultsRoom();
 
-    const judgeAuth = [hostAuth, player2Auth, player3Auth].find(
-      (auth) => auth.playerId === judgeId
-    ) as Auth;
+    const db = requireConnection();
+    const roomRow = db.prepare("SELECT id FROM rooms WHERE code = ? LIMIT 1").get(roomCode) as
+      | { id: string }
+      | undefined;
+    expect(roomRow).toBeDefined();
 
-    const pickSnapshot = await getSnapshot(roomCode, judgeAuth);
-    expect(pickSnapshot.game.submissions.length).toBeGreaterThan(0);
+    db.prepare("UPDATE room_players SET connected = 0 WHERE room_id = ? AND player_id = ?").run(
+      roomRow!.id,
+      nonJudgeAuth.playerId
+    );
 
-    const pickWinner = await request(app)
-      .post(`/rooms/${roomCode}/pick-winner`)
+    const nextRound = await request(app)
+      .post(`/rooms/${roomCode}/next-round`)
       .set(authHeaders(judgeAuth))
-      .send({ submissionId: pickSnapshot.game.submissions[0].submissionId });
+      .send({});
 
-    expect(pickWinner.status, JSON.stringify(pickWinner.body)).toBe(200);
-    expect(["ROUND_SUBMIT", "GAME_OVER"]).toContain(pickWinner.body.game.status);
+    expect(nextRound.status).toBe(200);
+    expect(nextRound.body.game.status).toBe("GAME_OVER");
+    expect(nextRound.body.game.endedReason).toBe("NOT_ENOUGH_PLAYERS");
   });
 
   it("requires exactly two cards when prompt has two blanks", async () => {

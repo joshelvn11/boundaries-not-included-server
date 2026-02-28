@@ -150,6 +150,20 @@ export function createRoomsRouter(roomService: RoomLifecycleService): Router {
   );
 
   router.post(
+    "/rooms/:code/next-round",
+    requireRoomAuth(roomService),
+    handle((req, res) => {
+      const auth = req.roomAuth;
+      if (!auth) {
+        throw new Error("Room auth context missing");
+      }
+
+      const snapshot = roomService.startNextRound(auth);
+      res.status(200).json(snapshot);
+    })
+  );
+
+  router.post(
     "/rooms/:code/leave",
     requireRoomAuth(roomService),
     handle((req, res) => {

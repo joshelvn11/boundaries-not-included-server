@@ -67,7 +67,7 @@ High-level orchestrator for:
 
 - create/join/reconnect
 - auth/session validation
-- ready/start/play-again/submit/pick-winner/leave
+- ready/start/play-again/submit/pick-winner/next-round/leave
 - disconnect grace removal and host reassignment
 - socket identity tracking per connection
 
@@ -80,7 +80,8 @@ Game state transitions:
 - accept grouped submissions (`handCardIds[]`) with exact count validation
 - transition submit -> judge pick
 - apply winner and score updates
-- rotate judge and create next round
+- transition to explicit `ROUND_RESULTS` for non-terminal rounds
+- start next round only when the current round judge calls next-round action
 - end game on target score or insufficient players
 - derives per-round pick count from black prompt text underscores (`_+`):
   - 0 blanks => pick count 1
@@ -140,6 +141,7 @@ Error contract is standardized in `src/app.ts`:
 - no submit timer, no judge timer
 - no host override for judge decision
 - mid-game joins blocked
+- non-terminal round progression is judge-controlled (`pick-winner` -> `ROUND_RESULTS` -> judge `next-round`)
 - host can reset `GAME_OVER` back to lobby via `POST /rooms/:code/play-again`; reset clears ready state, scores, and hands
 
 ## Testing
@@ -148,7 +150,7 @@ Error contract is standardized in `src/app.ts`:
 - `migrate.test.ts`: verifies migrated tables
 - `rooms.test.ts`: REST lifecycle and round flow integration
 - `socket.test.ts`: handshake success/failure and initial state emission
-- phase coverage includes multi-pick validation, blank-count prompt policy, unplayable-prompt start guard, grouped winner scoring, and existing play-again lifecycle.
+- phase coverage includes multi-pick validation, blank-count prompt policy, unplayable-prompt start guard, grouped winner scoring, explicit round-results snapshots, judge-only next-round progression, and existing play-again lifecycle.
 - Integration tests explicitly close their SQLite connections in `afterEach` to avoid cross-test resource leakage and flaky request failures.
 
 ## Contract ownership

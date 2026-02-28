@@ -232,6 +232,10 @@ export class GameEngineService {
       .prepare("UPDATE rounds SET status = ?, ended_at = ? WHERE id = ?")
       .run(GAME_STATUS.ROUND_RESULTS, nowIso(), round.id);
 
+    this.connection
+      .prepare("UPDATE games SET status = ?, winner_player_id = ? WHERE id = ?")
+      .run(GAME_STATUS.ROUND_RESULTS, submission.player_id, game.id);
+
     const winnerScore = (
       this.connection
         .prepare("SELECT score FROM room_players WHERE room_id = ? AND player_id = ? LIMIT 1")
@@ -246,6 +250,25 @@ export class GameEngineService {
     const connected = this.getConnectedMembers(roomId);
     if (connected.length < LIMITS.minPlayersToStart) {
       this.finishGame(roomId, game.id, submission.player_id, "NOT_ENOUGH_PLAYERS");
+      return;
+    }
+  }
+
+  startNextRound(roomId: string, callerPlayerId: string): void {
+    const game = this.getActiveGame(roomId);
+    const round = this.getCurrentRound(game.id);
+
+    if (game.status !== GAME_STATUS.ROUND_RESULTS || round.status !== GAME_STATUS.ROUND_RESULTS) {
+      throw new ApiError(409, "INVALID_STATE", "Round results are not ready to advance");
+    }
+
+    if (round.judge_player_id !== callerPlayerId) {
+      throw new ApiError(403, "FORBIDDEN", "Only the current judge can start the next round");
+    }
+
+    const connected = this.getConnectedMembers(roomId);
+    if (connected.length < LIMITS.minPlayersToStart) {
+      this.finishGame(roomId, game.id, null, "NOT_ENOUGH_PLAYERS");
       return;
     }
 
@@ -274,7 +297,7 @@ export class GameEngineService {
 
     this.connection
       .prepare("UPDATE games SET status = ?, current_round = ?, winner_player_id = ? WHERE id = ?")
-      .run(GAME_STATUS.SUBMIT, nextRoundNumber, submission.player_id, game.id);
+      .run(GAME_STATUS.SUBMIT, nextRoundNumber, null, game.id);
   }
 
   handleMembershipChange(roomId: string, removedPlayerId: string): void {

@@ -169,6 +169,107 @@ describe("socket authentication and state emission", () => {
     expect(payload.error).toBe("UNAUTHORIZED");
   });
 
+  it("emits round-results then next-round snapshots after judge actions", async () => {
+    const host = roomService.createRoom({ displayName: "Host" });
+    const join2 = roomService.joinRoom(host.roomCode, { displayName: "Player 2" });
+    const join3 = roomService.joinRoom(host.roomCode, { displayName: "Player 3" });
+
+    const hostAuth: Auth = { playerId: host.playerId, reconnectToken: host.reconnectToken };
+    const player2Auth: Auth = { playerId: join2.playerId, reconnectToken: join2.reconnectToken };
+    const player3Auth: Auth = { playerId: join3.playerId, reconnectToken: join3.reconnectToken };
+
+    const hostSocket = createClientSocket(`http://127.0.0.1:${serverPort}`, {
+      transports: ["websocket"],
+      auth: {
+        roomCode: host.roomCode,
+        playerId: hostAuth.playerId,
+        reconnectToken: hostAuth.reconnectToken
+      }
+    });
+    const player2Socket = createClientSocket(`http://127.0.0.1:${serverPort}`, {
+      transports: ["websocket"],
+      auth: {
+        roomCode: host.roomCode,
+        playerId: player2Auth.playerId,
+        reconnectToken: player2Auth.reconnectToken
+      }
+    });
+    clientSockets.push(hostSocket, player2Socket);
+
+    await onceEvent(hostSocket, "room:state");
+    await onceEvent(player2Socket, "room:state");
+
+    roomService.setReady(
+      roomService.authenticateRequest(host.roomCode, player2Auth.playerId, player2Auth.reconnectToken),
+      { isReady: true }
+    );
+    roomService.setReady(
+      roomService.authenticateRequest(host.roomCode, player3Auth.playerId, player3Auth.reconnectToken),
+      { isReady: true }
+    );
+    roomService.startGame(
+      roomService.authenticateRequest(host.roomCode, hostAuth.playerId, hostAuth.reconnectToken)
+    );
+
+    const startSnapshot = roomService.getSnapshotForPlayer(host.roomCode, hostAuth.playerId);
+    const judgePlayerId = startSnapshot.game?.judgePlayerId;
+    const participants = [hostAuth, player2Auth, player3Auth].filter(
+      (item) => item.playerId !== judgePlayerId
+    );
+
+    for (const participant of participants) {
+      const snapshot = roomService.getSnapshotForPlayer(host.roomCode, participant.playerId);
+      const pickCount = snapshot.game?.prompt?.pickCount ?? 1;
+      roomService.submitCard(
+        roomService.authenticateRequest(host.roomCode, participant.playerId, participant.reconnectToken),
+        {
+          handCardIds: snapshot.viewer.hand.slice(0, pickCount).map((card) => card.handCardId)
+        }
+      );
+    }
+
+    const judgeAuth = [hostAuth, player2Auth, player3Auth].find(
+      (item) => item.playerId === judgePlayerId
+    ) as Auth;
+    const pickSnapshot = roomService.getSnapshotForPlayer(host.roomCode, judgeAuth.playerId);
+    const submissionId = pickSnapshot.game?.submissions[0].submissionId as string;
+
+    const hostResultsState = waitForRoomState(hostSocket, (payload) => {
+      const game = payload.game as { status?: string } | null;
+      return game?.status === "ROUND_RESULTS";
+    });
+    const player2ResultsState = waitForRoomState(player2Socket, (payload) => {
+      const game = payload.game as { status?: string } | null;
+      return game?.status === "ROUND_RESULTS";
+    });
+
+    roomService.pickWinner(
+      roomService.authenticateRequest(host.roomCode, judgeAuth.playerId, judgeAuth.reconnectToken),
+      { submissionId }
+    );
+
+    const [hostResults, player2Results] = await Promise.all([hostResultsState, player2ResultsState]);
+    expect((hostResults.game as { status?: string } | null)?.status).toBe("ROUND_RESULTS");
+    expect((player2Results.game as { status?: string } | null)?.status).toBe("ROUND_RESULTS");
+
+    const hostNextRoundState = waitForRoomState(hostSocket, (payload) => {
+      const game = payload.game as { status?: string; currentRound?: number } | null;
+      return game?.status === "ROUND_SUBMIT" && game.currentRound === 2;
+    });
+    const player2NextRoundState = waitForRoomState(player2Socket, (payload) => {
+      const game = payload.game as { status?: string; currentRound?: number } | null;
+      return game?.status === "ROUND_SUBMIT" && game.currentRound === 2;
+    });
+
+    roomService.startNextRound(
+      roomService.authenticateRequest(host.roomCode, judgeAuth.playerId, judgeAuth.reconnectToken)
+    );
+
+    const [hostNextRound, player2NextRound] = await Promise.all([hostNextRoundState, player2NextRoundState]);
+    expect((hostNextRound.game as { status?: string } | null)?.status).toBe("ROUND_SUBMIT");
+    expect((player2NextRound.game as { status?: string } | null)?.status).toBe("ROUND_SUBMIT");
+  });
+
   it("emits lobby snapshot to connected clients after host play-again", async () => {
     const host = roomService.createRoom({ displayName: "Host" });
     const join2 = roomService.joinRoom(host.roomCode, { displayName: "Player 2" });

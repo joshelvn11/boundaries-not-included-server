@@ -258,7 +258,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
   /rooms/{code}/pick-winner:
     post:
-      summary: Judge selects winning submission
+      summary: Judge selects winning submission and transitions to round results
       operationId: pickWinner
       parameters:
         - $ref: '#/components/parameters/RoomCode'
@@ -281,6 +281,35 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         "403":
           description: Judge-only endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Invalid game state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /rooms/{code}/next-round:
+    post:
+      summary: Judge advances room from round results to the next round
+      operationId: startNextRound
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+        - $ref: '#/components/parameters/PlayerIdHeader'
+        - $ref: '#/components/parameters/BearerTokenHeader'
+      responses:
+        "200":
+          description: Updated snapshot after next round start or terminal game-over
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSnapshot'
+        "401":
+          $ref: '#/components/responses/Unauthorized'
+        "403":
+          description: Current-judge-only endpoint
           content:
             application/json:
               schema:

@@ -509,6 +509,17 @@ export class RoomLifecycleService {
     return snapshot;
   }
 
+  startNextRound(auth: RequestAuthContext): RoomSnapshot {
+    const tx = this.connection.transaction(() => {
+      this.gameEngine.startNextRound(auth.roomId, auth.playerId);
+    });
+    tx();
+
+    const snapshot = this.snapshotService.getSnapshot(auth.roomCode, auth.playerId);
+    this.notifyRoom(auth.roomCode);
+    return snapshot;
+  }
+
   leaveRoom(auth: RequestAuthContext): void {
     const room = this.getRoomByCode(auth.roomCode);
 

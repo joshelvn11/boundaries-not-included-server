@@ -44,12 +44,18 @@ pnpm db:migrate  # apply SQL migrations
 - `POST /rooms/:code/play-again`
 - `POST /rooms/:code/submit`
 - `POST /rooms/:code/pick-winner`
+- `POST /rooms/:code/next-round`
 - `POST /rooms/:code/leave`
 
 Phase 7 submit payload:
 
 - `POST /rooms/:code/submit` now accepts `{ "handCardIds": ["hand_a", "hand_b"] }`
 - Required card count is derived from black-card underscore blanks per round (`0 -> 1`, `1..3 -> exact`, `>3` prompts skipped)
+
+Round progression:
+
+- `POST /rooms/:code/pick-winner` now transitions non-terminal rounds to `ROUND_RESULTS`.
+- The current round judge must call `POST /rooms/:code/next-round` to begin the next `ROUND_SUBMIT`.
 
 Authenticated endpoints require:
 
