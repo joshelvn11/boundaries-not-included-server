@@ -1,0 +1,26 @@
+services:
+  server:
+    build: .
+    ports:
+      - "${HOST_PORT:-4000}:4000"
+    environment:
+      PORT: "4000"
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      BNI_SQLITE_PATH: /data/bni.sqlite
+    volumes:
+      - bni-sqlite:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:4000/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  bni-sqlite:

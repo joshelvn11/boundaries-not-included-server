@@ -25,6 +25,14 @@ Environment variables:
 - `CORS_ORIGIN` (default `*`)
 - `BNI_SQLITE_PATH` (default `./data/bni.sqlite`)
 
+### Docker / Compose
+
+- **Context:** Run the same Node process as `pnpm start` in a container, with a persistent volume for SQLite.
+- **Implementation:** `Dockerfile` is a two-stage build on `node:20-bookworm-slim`: the builder installs `python3`, `make`, and `g++` so `better-sqlite3` can compile, runs `pnpm install --frozen-lockfile`, `pnpm build`, and `pnpm prune --prod`. The runner image copies `dist/`, `node_modules/` (pruned), `drizzle/`, and `openapi/` only.
+- **Data flow:** On boot, `dist/index.js` calls `runMigrations(env.BNI_SQLITE_PATH)` then opens SQLite. Compose sets `BNI_SQLITE_PATH=/data/bni.sqlite` and mounts named volume `bni-sqlite` at `/data`.
+- **Dependencies:** Requires Docker with BuildKit (default in current Docker Desktop). Compose file sets `CORS_ORIGIN` from the host environment (default `*`) for Expo/web dev against a LAN IP.
+- **Failure modes / edge cases:** If the Docker daemon is unavailable, `docker compose build` fails locally—no fallback. Empty DB: gameplay needs populated `white_cards` / `black_cards` (populator or copied DB). Changing only `HOST_PORT` in Compose does not change the in-container `PORT` (healthcheck targets `4000`).
+
 ## Data model
 
 ### Existing core tables

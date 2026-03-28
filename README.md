@@ -25,6 +25,25 @@ pnpm typecheck   # strict TS checks
 pnpm db:migrate  # apply SQL migrations
 ```
 
+## Docker
+
+Build and run with Compose from this directory (`boundaries-not-included-server`):
+
+```bash
+docker compose up --build
+```
+
+- HTTP and Socket.IO listen on container port `4000` (default host mapping `4000:4000`).
+- Override the host port: `HOST_PORT=8080 docker compose up --build`.
+- SQLite is stored in the `bni-sqlite` Docker volume at `BNI_SQLITE_PATH=/data/bni.sqlite` inside the container. Migrations run automatically on startup (same as local `pnpm start`).
+- Card tables are empty until you run the populator against a database file; for a one-off seed you can copy a populated SQLite file into the volume or run the populator with `BNI_SQLITE_PATH` pointing at that file (see workspace README).
+
+Build the image only:
+
+```bash
+docker build -t boundaries-not-included-server .
+```
+
 ## Environment
 
 - `PORT` (default `4000`)

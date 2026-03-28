@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Added `Dockerfile`, `.dockerignore`, and `docker-compose.yml` to run the server in a container with a named volume for SQLite (`/data/bni.sqlite`), documented in README and TECHNICAL.
 - Added Phase 2 room/game REST API: create, join, reconnect, ready, start, submit, pick-winner, leave, and snapshot retrieval.
 - Added token-based room session management with hashed reconnect tokens (`room_sessions`).
 - Added player hand persistence table (`player_hands`) and hand-card submission model.
