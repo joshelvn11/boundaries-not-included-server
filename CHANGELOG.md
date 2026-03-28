@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `POST /rooms/:code/next-round` for judge-driven transition from `ROUND_RESULTS` to the next round.
 - Added server integration coverage for round-results snapshots, judge-only next-round authorization, invalid-state handling, and not-enough-connected-player game-over behavior at next-round time.
 - Added socket coverage for `room:state` emissions on `pick-winner -> ROUND_RESULTS` and `next-round -> ROUND_SUBMIT`.
+- Added `GET /packs` endpoint for playable pack catalog with active white/black counts.
+- Added server integration coverage for pack catalog, pack validation on create, selected-pack gameplay filtering, and legacy pack fallback behavior.
 
 ### Changed
 
@@ -41,6 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Updated snapshot submission payloads to include ordered `answerCards` and a filled-sentence `text` preview for judge/results/game-over views.
 - Updated non-terminal `pick-winner` behavior to stop in `ROUND_RESULTS` instead of auto-starting the next round.
 - Updated round progression to require current judge action (`POST /rooms/:code/next-round`) before advancing from results.
+- Updated room settings to persist `packs: string[]` and include pack selection in snapshots.
+- Updated create-room validation to reject unknown pack names and to default omitted packs to all playable packs.
+- Updated game engine card-pool selection to filter white/black cards by room-selected packs.
 
 ### Fixed
 

@@ -35,6 +35,7 @@ export const LIMITS = {
 export type RoomSettings = {
   maxPlayers: number;
   targetScore: number;
+  packs: string[];
 };
 
 export type RoomSnapshot = {

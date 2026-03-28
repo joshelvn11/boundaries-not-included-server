@@ -15,6 +15,7 @@ import {
   type SessionBundle
 } from "../types/domain";
 import { GameEngineService } from "./game-engine.service";
+import { inferPromptPickCount } from "./prompt-policy.service";
 import { generateUniqueRoomCode } from "./room-code.service";
 import { createReconnectToken, hashToken } from "./session.service";
 import { SnapshotService } from "./snapshot.service";
@@ -34,6 +35,13 @@ const createRoomSchema = z.object({
         .int()
         .min(LIMITS.minTargetScore)
         .max(LIMITS.maxTargetScore)
+        .optional(),
+      packs: z
+        .array(z.string().trim().min(1))
+        .min(1)
+        .refine((items) => new Set(items).size === items.length, {
+          message: "packs must be unique"
+        })
         .optional()
     })
     .optional()
@@ -83,6 +91,22 @@ type SessionRow = {
   revoked_at: string | null;
 };
 
+type PackCountRow = {
+  pack: string;
+  count: number;
+};
+
+type BlackPromptRow = {
+  pack: string;
+  text: string;
+};
+
+type AvailablePack = {
+  name: string;
+  whiteCount: number;
+  blackCount: number;
+};
+
 function createId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
 }
@@ -94,14 +118,20 @@ function nowIso(): string {
 function parseRoomSettings(rawSettings: string): RoomSettings {
   try {
     const parsed = JSON.parse(rawSettings) as Partial<RoomSettings>;
+    const parsedPacks = Array.isArray(parsed.packs)
+      ? parsed.packs.map((pack) => String(pack).trim()).filter((pack) => pack.length > 0)
+      : [];
+
     return {
       maxPlayers: parsed.maxPlayers ?? DEFAULT_SETTINGS.maxPlayers,
-      targetScore: parsed.targetScore ?? DEFAULT_SETTINGS.targetScore
+      targetScore: parsed.targetScore ?? DEFAULT_SETTINGS.targetScore,
+      packs: parsedPacks
     };
   } catch {
     return {
       maxPlayers: DEFAULT_SETTINGS.maxPlayers,
-      targetScore: DEFAULT_SETTINGS.targetScore
+      targetScore: DEFAULT_SETTINGS.targetScore,
+      packs: []
     };
   }
 }
@@ -157,6 +187,12 @@ export class RoomLifecycleService {
     return pickSchema.parse(input);
   }
 
+  listPacks(): { packs: AvailablePack[] } {
+    return {
+      packs: this.getAvailablePacks()
+    };
+  }
+
   createRoom(input: z.infer<typeof createRoomSchema>): {
     roomCode: string;
     playerId: string;
@@ -164,6 +200,19 @@ export class RoomLifecycleService {
     snapshot: RoomSnapshot;
   } {
     const parsed = this.validateCreatePayload(input);
+    const availablePacks = this.getAvailablePacks();
+    const availablePackNames = new Set(availablePacks.map((pack) => pack.name));
+
+    const selectedPacks = parsed.settings?.packs
+      ? parsed.settings.packs
+      : availablePacks.map((pack) => pack.name);
+
+    if (parsed.settings?.packs) {
+      const unknownPacks = parsed.settings.packs.filter((pack) => !availablePackNames.has(pack));
+      if (unknownPacks.length > 0) {
+        throw new ApiError(422, "VALIDATION_ERROR", `Unknown packs: ${unknownPacks.join(", ")}`);
+      }
+    }
 
     let roomCode = "";
     let playerId = "";
@@ -177,7 +226,8 @@ export class RoomLifecycleService {
 
       const settings: RoomSettings = {
         maxPlayers: parsed.settings?.maxPlayers ?? DEFAULT_SETTINGS.maxPlayers,
-        targetScore: parsed.settings?.targetScore ?? DEFAULT_SETTINGS.targetScore
+        targetScore: parsed.settings?.targetScore ?? DEFAULT_SETTINGS.targetScore,
+        packs: selectedPacks
       };
 
       this.connection
@@ -228,7 +278,7 @@ export class RoomLifecycleService {
       throw new ApiError(409, "GAME_IN_PROGRESS_JOIN_BLOCKED", "Cannot join room while a game is in progress");
     }
 
-    const settings = parseRoomSettings(room.settings_json);
+    const settings = this.resolveRoomSettings(room.settings_json);
     const memberCount = (
       this.connection
         .prepare("SELECT COUNT(*) AS count FROM room_players WHERE room_id = ?")
@@ -424,7 +474,7 @@ export class RoomLifecycleService {
       throw new ApiError(409, "NOT_READY_TO_START", "All connected players must be ready");
     }
 
-    const settings = parseRoomSettings(room.settings_json);
+    const settings = this.resolveRoomSettings(room.settings_json);
 
     const tx = this.connection.transaction(() => {
       this.gameEngine.startGame(auth.roomId, settings);
@@ -510,8 +560,11 @@ export class RoomLifecycleService {
   }
 
   startNextRound(auth: RequestAuthContext): RoomSnapshot {
+    const room = this.getRoomByCode(auth.roomCode);
+    const settings = this.resolveRoomSettings(room.settings_json);
+
     const tx = this.connection.transaction(() => {
-      this.gameEngine.startNextRound(auth.roomId, auth.playerId);
+      this.gameEngine.startNextRound(auth.roomId, auth.playerId, settings);
     });
     tx();
 
@@ -753,6 +806,68 @@ export class RoomLifecycleService {
     if (activeGame && activeGame.status === GAME_STATUS.OVER) {
       this.connection.prepare("UPDATE rooms SET status = ? WHERE id = ?").run(ROOM_STATUS.OPEN, roomId);
     }
+  }
+
+  private resolveRoomSettings(rawSettings: string): RoomSettings {
+    const parsed = parseRoomSettings(rawSettings);
+    if (parsed.packs.length > 0) {
+      return parsed;
+    }
+
+    return {
+      ...parsed,
+      packs: this.getAvailablePacks().map((pack) => pack.name)
+    };
+  }
+
+  private getAvailablePacks(): AvailablePack[] {
+    const whiteByPackRows = this.connection
+      .prepare(
+        `SELECT pack, COUNT(*) AS count
+         FROM white_cards
+         WHERE is_active = 1
+         GROUP BY pack`
+      )
+      .all() as PackCountRow[];
+
+    const whiteCountByPack = new Map<string, number>();
+    for (const row of whiteByPackRows) {
+      whiteCountByPack.set(row.pack, row.count);
+    }
+
+    const blackRows = this.connection
+      .prepare(
+        `SELECT pack, text
+         FROM black_cards
+         WHERE is_active = 1`
+      )
+      .all() as BlackPromptRow[];
+
+    const playableBlackCountByPack = new Map<string, number>();
+    for (const row of blackRows) {
+      if (inferPromptPickCount(row.text) === null) {
+        continue;
+      }
+
+      playableBlackCountByPack.set(row.pack, (playableBlackCountByPack.get(row.pack) ?? 0) + 1);
+    }
+
+    const packs: AvailablePack[] = [];
+    for (const [name, whiteCount] of whiteCountByPack.entries()) {
+      const blackCount = playableBlackCountByPack.get(name) ?? 0;
+      if (whiteCount === 0 || blackCount === 0) {
+        continue;
+      }
+
+      packs.push({
+        name,
+        whiteCount,
+        blackCount
+      });
+    }
+
+    packs.sort((a, b) => a.name.localeCompare(b.name));
+    return packs;
   }
 
   private getRoomByCode(roomCodeInput: string): RoomRow {

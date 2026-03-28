@@ -8,6 +8,7 @@ import {
   type RoomSnapshot,
   type RoomStatus
 } from "../types/domain";
+import { inferPromptPickCount } from "./prompt-policy.service";
 
 type RoomRow = {
   id: string;
@@ -86,14 +87,20 @@ type GroupedSubmission = {
 function parseRoomSettings(raw: string): RoomSettings {
   try {
     const parsed = JSON.parse(raw) as Partial<RoomSettings>;
+    const parsedPacks = Array.isArray(parsed.packs)
+      ? parsed.packs.map((pack) => String(pack).trim()).filter((pack) => pack.length > 0)
+      : [];
+
     return {
       maxPlayers: parsed.maxPlayers ?? DEFAULT_SETTINGS.maxPlayers,
-      targetScore: parsed.targetScore ?? DEFAULT_SETTINGS.targetScore
+      targetScore: parsed.targetScore ?? DEFAULT_SETTINGS.targetScore,
+      packs: parsedPacks
     };
   } catch {
     return {
       maxPlayers: DEFAULT_SETTINGS.maxPlayers,
-      targetScore: DEFAULT_SETTINGS.targetScore
+      targetScore: DEFAULT_SETTINGS.targetScore,
+      packs: []
     };
   }
 }
@@ -186,12 +193,14 @@ export class SnapshotService {
       )
       .get(room.id) as GameRow | undefined;
 
+    const roomSettings = this.resolveRoomSettings(room.settings_json);
+
     const snapshot: RoomSnapshot = {
       room: {
         id: room.id,
         code: room.code,
         status: room.status,
-        settings: parseRoomSettings(room.settings_json)
+        settings: roomSettings
       },
       members: members.map((member) => ({
         playerId: member.player_id,
@@ -340,5 +349,45 @@ export class SnapshotService {
     };
 
     return snapshot;
+  }
+
+  private resolveRoomSettings(rawSettings: string): RoomSettings {
+    const parsed = parseRoomSettings(rawSettings);
+    if (parsed.packs.length > 0) {
+      return parsed;
+    }
+
+    return {
+      ...parsed,
+      packs: this.getAvailablePackNames()
+    };
+  }
+
+  private getAvailablePackNames(): string[] {
+    const whiteRows = this.connection
+      .prepare(
+        `SELECT pack, COUNT(*) AS count
+         FROM white_cards
+         WHERE is_active = 1
+         GROUP BY pack`
+      )
+      .all() as Array<{ pack: string; count: number }>;
+    const whitePackNames = new Set(whiteRows.filter((row) => row.count > 0).map((row) => row.pack));
+
+    const blackRows = this.connection
+      .prepare(
+        `SELECT pack, text
+         FROM black_cards
+         WHERE is_active = 1`
+      )
+      .all() as Array<{ pack: string; text: string }>;
+
+    const playableBlackPackNames = new Set(
+      blackRows.filter((row) => inferPromptPickCount(row.text) !== null).map((row) => row.pack)
+    );
+
+    return [...whitePackNames].filter((pack) => playableBlackPackNames.has(pack)).sort((a, b) => {
+      return a.localeCompare(b);
+    });
   }
 }

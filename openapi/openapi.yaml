@@ -42,6 +42,17 @@ paths:
             text/yaml:
               schema:
                 type: string
+  /packs:
+    get:
+      summary: List playable card packs and active card counts
+      operationId: listPacks
+      responses:
+        "200":
+          description: Pack list for create-room selection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackListResponse'
   /rooms:
     post:
       summary: Create a room and host session
@@ -393,7 +404,24 @@ components:
           minLength: 2
           maxLength: 24
         settings:
-          $ref: '#/components/schemas/RoomSettings'
+          $ref: '#/components/schemas/CreateRoomSettings'
+    CreateRoomSettings:
+      type: object
+      properties:
+        maxPlayers:
+          type: integer
+          minimum: 3
+          maximum: 10
+        targetScore:
+          type: integer
+          minimum: 3
+          maximum: 20
+        packs:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
     JoinRoomRequest:
       type: object
       required: [displayName]
@@ -456,9 +484,27 @@ components:
           type: string
         snapshot:
           $ref: '#/components/schemas/RoomSnapshot'
+    PackSummary:
+      type: object
+      required: [name, whiteCount, blackCount]
+      properties:
+        name:
+          type: string
+        whiteCount:
+          type: integer
+        blackCount:
+          type: integer
+    PackListResponse:
+      type: object
+      required: [packs]
+      properties:
+        packs:
+          type: array
+          items:
+            $ref: '#/components/schemas/PackSummary'
     RoomSettings:
       type: object
-      required: [maxPlayers, targetScore]
+      required: [maxPlayers, targetScore, packs]
       properties:
         maxPlayers:
           type: integer
@@ -468,6 +514,10 @@ components:
           type: integer
           minimum: 3
           maximum: 20
+        packs:
+          type: array
+          items:
+            type: string
     RoomSnapshot:
       type: object
       required: [room, members, game, viewer]

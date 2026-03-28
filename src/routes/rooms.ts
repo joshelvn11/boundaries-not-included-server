@@ -18,6 +18,14 @@ function handle(
 export function createRoomsRouter(roomService: RoomLifecycleService): Router {
   const router = Router();
 
+  router.get(
+    "/packs",
+    handle((_req, res) => {
+      const result = roomService.listPacks();
+      res.status(200).json(result);
+    })
+  );
+
   router.post(
     "/rooms",
     handle((req, res) => {

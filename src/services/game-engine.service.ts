@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 
 import { ApiError } from "../errors/api-error";
 import { GAME_STATUS, LIMITS, ROOM_STATUS, type RoomSettings } from "../types/domain";
+import { inferPromptPickCount } from "./prompt-policy.service";
 
 type ActiveGameRow = {
   id: string;
@@ -53,17 +54,19 @@ function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
-function inferPromptPickCount(promptText: string): number | null {
-  const blankCount = promptText.match(/_+/g)?.length ?? 0;
-  if (blankCount === 0) {
-    return 1;
+function buildPackFilterClause(columnName: string, packs: string[]): { clause: string; values: string[] } {
+  if (packs.length === 0) {
+    return {
+      clause: "",
+      values: []
+    };
   }
 
-  if (blankCount > 3) {
-    return null;
-  }
-
-  return blankCount;
+  const placeholders = packs.map(() => "?").join(", ");
+  return {
+    clause: ` AND ${columnName} IN (${placeholders})`,
+    values: packs
+  };
 }
 
 export class GameEngineService {
@@ -75,13 +78,13 @@ export class GameEngineService {
       throw new ApiError(409, "NOT_READY_TO_START", "At least 3 connected players are required to start");
     }
 
-    this.assertCardPoolAvailable();
+    this.assertCardPoolAvailable(settings.packs);
 
     const gameId = createId("game");
     const roundId = createId("round");
     const startedAt = nowIso();
     const judge = connectedPlayers[0];
-    const blackPrompt = this.pickPlayableBlackPrompt();
+    const blackPrompt = this.pickPlayableBlackPrompt(settings.packs);
 
     this.connection.prepare("DELETE FROM player_hands WHERE room_id = ?").run(roomId);
 
@@ -111,7 +114,7 @@ export class GameEngineService {
     this.connection.prepare("UPDATE rooms SET status = ? WHERE id = ?").run(ROOM_STATUS.IN_GAME, roomId);
     this.connection.prepare("UPDATE room_players SET score = 0, is_ready = 0 WHERE room_id = ?").run(roomId);
 
-    this.ensureHands(roomId, connectedPlayers.map((row) => row.player_id));
+    this.ensureHands(roomId, connectedPlayers.map((row) => row.player_id), settings.packs);
   }
 
   submitCard(roomId: string, playerId: string, handCardIds: string[]): void {
@@ -254,7 +257,7 @@ export class GameEngineService {
     }
   }
 
-  startNextRound(roomId: string, callerPlayerId: string): void {
+  startNextRound(roomId: string, callerPlayerId: string, settings: RoomSettings): void {
     const game = this.getActiveGame(roomId);
     const round = this.getCurrentRound(game.id);
 
@@ -275,9 +278,9 @@ export class GameEngineService {
     const nextJudge = this.selectNextJudge(connected, round.judge_player_id);
     const nextRoundNumber = round.round_number + 1;
     const nextRoundId = createId("round");
-    const blackPrompt = this.pickPlayableBlackPrompt();
+    const blackPrompt = this.pickPlayableBlackPrompt(settings.packs);
 
-    this.ensureHands(roomId, connected.map((row) => row.player_id));
+    this.ensureHands(roomId, connected.map((row) => row.player_id), settings.packs);
 
     this.connection
       .prepare(
@@ -475,7 +478,9 @@ export class GameEngineService {
     return connected[nextIndex];
   }
 
-  private ensureHands(roomId: string, playerIds: string[]): void {
+  private ensureHands(roomId: string, playerIds: string[], packs: string[]): void {
+    const packFilter = buildPackFilterClause("pack", packs);
+
     for (const playerId of playerIds) {
       const count = (
         this.connection
@@ -493,13 +498,14 @@ export class GameEngineService {
           `SELECT id
            FROM white_cards
            WHERE is_active = 1
+             ${packFilter.clause}
              AND id NOT IN (
                SELECT white_card_id FROM player_hands WHERE room_id = ? AND player_id = ?
              )
            ORDER BY RANDOM()
            LIMIT ?`
         )
-        .all(roomId, playerId, needed) as Array<{ id: string }>;
+        .all(...packFilter.values, roomId, playerId, needed) as Array<{ id: string }>;
 
       const insertHand = this.connection.prepare(
         `INSERT INTO player_hands (id, room_id, player_id, white_card_id, dealt_at)
@@ -512,10 +518,11 @@ export class GameEngineService {
     }
   }
 
-  private pickPlayableBlackPrompt(): { id: string; pickCountRequired: number } {
+  private pickPlayableBlackPrompt(packs: string[]): { id: string; pickCountRequired: number } {
+    const packFilter = buildPackFilterClause("pack", packs);
     const cards = this.connection
-      .prepare("SELECT id, text FROM black_cards WHERE is_active = 1 ORDER BY RANDOM()")
-      .all() as BlackCardRow[];
+      .prepare(`SELECT id, text FROM black_cards WHERE is_active = 1 ${packFilter.clause} ORDER BY RANDOM()`)
+      .all(...packFilter.values) as BlackCardRow[];
 
     for (const card of cards) {
       const inferredPickCount = inferPromptPickCount(card.text);
@@ -536,17 +543,19 @@ export class GameEngineService {
     );
   }
 
-  private assertCardPoolAvailable(): void {
+  private assertCardPoolAvailable(packs: string[]): void {
+    const whitePackFilter = buildPackFilterClause("pack", packs);
     const whiteCount = (
       this.connection
-        .prepare("SELECT COUNT(*) AS count FROM white_cards WHERE is_active = 1")
-        .get() as { count: number }
+        .prepare(`SELECT COUNT(*) AS count FROM white_cards WHERE is_active = 1 ${whitePackFilter.clause}`)
+        .get(...whitePackFilter.values) as { count: number }
     ).count;
 
+    const blackPackFilter = buildPackFilterClause("pack", packs);
     const blackCount = (
       this.connection
-        .prepare("SELECT COUNT(*) AS count FROM black_cards WHERE is_active = 1")
-        .get() as { count: number }
+        .prepare(`SELECT COUNT(*) AS count FROM black_cards WHERE is_active = 1 ${blackPackFilter.clause}`)
+        .get(...blackPackFilter.values) as { count: number }
     ).count;
 
     if (whiteCount === 0 || blackCount === 0) {

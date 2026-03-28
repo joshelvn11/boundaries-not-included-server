@@ -66,10 +66,20 @@ Environment variables:
 High-level orchestrator for:
 
 - create/join/reconnect
+- pack catalog listing (`GET /packs`)
 - auth/session validation
 - ready/start/play-again/submit/pick-winner/next-round/leave
 - disconnect grace removal and host reassignment
 - socket identity tracking per connection
+
+Create-room pack rules:
+
+- room settings now persist `packs: string[]` in `rooms.settings_json`.
+- if caller supplies `settings.packs`, values must be unique and must exist in current playable pack catalog.
+- if caller omits `settings.packs`, service resolves to all currently playable packs for backward compatibility.
+- playable pack catalog is computed from active cards:
+  - white count > 0
+  - playable black count > 0 (black prompts with inferred pick count 1..3)
 
 ### `game-engine.service.ts`
 
@@ -87,6 +97,10 @@ Game state transitions:
   - 0 blanks => pick count 1
   - 1..3 blanks => exact blank count
   - >3 blanks => prompt skipped as unplayable
+- applies room-selected pack filters when:
+  - validating card pool availability at game start
+  - selecting black prompts
+  - dealing white cards to player hands
 
 ### `snapshot.service.ts`
 
@@ -104,6 +118,11 @@ Builds personalized `room:state` payload:
 ## REST layer
 
 `src/routes/rooms.ts` contains all room/game command endpoints.
+
+Additional read endpoint:
+
+- `GET /packs` returns playable packs for create-room multiselect:
+  - `{ packs: [{ name, whiteCount, blackCount }] }`
 
 Auth middleware (`src/middleware/auth.ts`) validates:
 

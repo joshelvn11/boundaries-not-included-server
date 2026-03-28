@@ -31,10 +31,11 @@ pnpm db:migrate  # apply SQL migrations
 - `CORS_ORIGIN` (default `*`)
 - `BNI_SQLITE_PATH` (default `./data/bni.sqlite`)
 
-## REST API (Phase 2)
+## REST API
 
 - `GET /health`
 - `GET /openapi.yaml`
+- `GET /packs`
 - `POST /rooms`
 - `POST /rooms/:code/join`
 - `POST /rooms/:code/reconnect`
@@ -46,6 +47,12 @@ pnpm db:migrate  # apply SQL migrations
 - `POST /rooms/:code/pick-winner`
 - `POST /rooms/:code/next-round`
 - `POST /rooms/:code/leave`
+
+Create-room pack settings:
+
+- `GET /packs` returns playable pack catalog with active white/black counts.
+- `POST /rooms` supports `settings.packs: string[]` (pack names).
+- If `settings.packs` is omitted, server falls back to all currently playable packs.
 
 Phase 7 submit payload:
 

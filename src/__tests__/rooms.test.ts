@@ -244,6 +244,16 @@ beforeEach(async () => {
     insertWhiteCard.run(`white_${i}`, `White card ${i}`, "base", `white_source_${i}`, 1);
   }
 
+  for (let i = 1; i <= 12; i += 1) {
+    insertWhiteCard.run(
+      `exp_white_${i}`,
+      `Expansion white card ${i}`,
+      "expansion",
+      `exp_white_source_${i}`,
+      1
+    );
+  }
+
   const insertBlackCard = connection.prepare(
     `INSERT INTO black_cards (id, text, pick_count, pack, source_id, is_active)
      VALUES (?, ?, ?, ?, ?, ?)`
@@ -264,6 +274,14 @@ beforeEach(async () => {
     4,
     "base",
     "black_source_4",
+    1
+  );
+  insertBlackCard.run(
+    "exp_black_one_blank",
+    "Only ____ can save us now.",
+    1,
+    "expansion",
+    "exp_black_source_1",
     1
   );
 
@@ -290,6 +308,116 @@ afterEach(() => {
 });
 
 describe("rooms API", () => {
+  it("lists playable packs with white/black counts", async () => {
+    const response = await request(app).get("/packs");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      packs: [
+        { name: "base", whiteCount: 16, blackCount: 3 },
+        { name: "expansion", whiteCount: 12, blackCount: 1 }
+      ]
+    });
+  });
+
+  it("creates room with selected packs and persists settings in snapshot", async () => {
+    const createResponse = await request(app).post("/rooms").send({
+      displayName: "Host",
+      settings: {
+        maxPlayers: 8,
+        targetScore: 5,
+        packs: ["expansion"]
+      }
+    });
+
+    expect(createResponse.status).toBe(201);
+    expect(createResponse.body.snapshot.room.settings).toEqual({
+      maxPlayers: 8,
+      targetScore: 5,
+      packs: ["expansion"]
+    });
+  });
+
+  it("rejects room creation when unknown packs are provided", async () => {
+    const createResponse = await request(app).post("/rooms").send({
+      displayName: "Host",
+      settings: {
+        packs: ["does-not-exist"]
+      }
+    });
+
+    expect(createResponse.status).toBe(422);
+    expect(createResponse.body.error).toBe("VALIDATION_ERROR");
+    expect(createResponse.body.message).toContain("Unknown packs");
+  });
+
+  it("legacy create without packs resolves to all playable packs", async () => {
+    const createResponse = await request(app).post("/rooms").send({ displayName: "Host" });
+
+    expect(createResponse.status).toBe(201);
+    expect(createResponse.body.snapshot.room.settings.packs).toEqual(["base", "expansion"]);
+  });
+
+  it("starts game using only the selected pack pool", async () => {
+    const createResponse = await request(app).post("/rooms").send({
+      displayName: "Host",
+      settings: {
+        packs: ["expansion"]
+      }
+    });
+    const roomCode = createResponse.body.roomCode as string;
+    const hostAuth: Auth = {
+      playerId: createResponse.body.playerId,
+      reconnectToken: createResponse.body.reconnectToken
+    };
+
+    const join2 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 2" });
+    const join3 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 3" });
+    const player2Auth: Auth = { playerId: join2.body.playerId, reconnectToken: join2.body.reconnectToken };
+    const player3Auth: Auth = { playerId: join3.body.playerId, reconnectToken: join3.body.reconnectToken };
+
+    await request(app).post(`/rooms/${roomCode}/ready`).set(authHeaders(player2Auth)).send({ isReady: true });
+    await request(app).post(`/rooms/${roomCode}/ready`).set(authHeaders(player3Auth)).send({ isReady: true });
+
+    const start = await request(app).post(`/rooms/${roomCode}/start`).set(authHeaders(hostAuth)).send({});
+    expect(start.status).toBe(200);
+    expect(start.body.game.prompt.cardId).toBe("exp_black_one_blank");
+    expect((start.body.viewer.hand as Array<{ pack: string }>).every((card) => card.pack === "expansion")).toBe(
+      true
+    );
+  });
+
+  it("fails start when selected pack pool is emptied before game start", async () => {
+    const createResponse = await request(app).post("/rooms").send({
+      displayName: "Host",
+      settings: {
+        packs: ["expansion"]
+      }
+    });
+    const roomCode = createResponse.body.roomCode as string;
+    const hostAuth: Auth = {
+      playerId: createResponse.body.playerId,
+      reconnectToken: createResponse.body.reconnectToken
+    };
+
+    const join2 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 2" });
+    const join3 = await request(app).post(`/rooms/${roomCode}/join`).send({ displayName: "Player 3" });
+    const player2Auth: Auth = { playerId: join2.body.playerId, reconnectToken: join2.body.reconnectToken };
+    const player3Auth: Auth = { playerId: join3.body.playerId, reconnectToken: join3.body.reconnectToken };
+
+    await request(app).post(`/rooms/${roomCode}/ready`).set(authHeaders(player2Auth)).send({ isReady: true });
+    await request(app).post(`/rooms/${roomCode}/ready`).set(authHeaders(player3Auth)).send({ isReady: true });
+
+    const db = requireConnection();
+    db.prepare("UPDATE white_cards SET is_active = 0 WHERE pack = ?").run("expansion");
+    db.prepare("UPDATE black_cards SET is_active = 0 WHERE pack = ?").run("expansion");
+
+    const start = await request(app).post(`/rooms/${roomCode}/start`).set(authHeaders(hostAuth)).send({});
+    expect(start.status).toBe(409);
+    expect(start.body.error).toBe("INVALID_STATE");
+    expect(start.body.message).toContain("Card pool is empty");
+  });
+
   it("creates room, joins players, readies all, and starts game", async () => {
     const createResponse = await request(app).post("/rooms").send({
       displayName: "Host",
